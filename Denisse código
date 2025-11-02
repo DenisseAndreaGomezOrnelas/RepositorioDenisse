@@ -1,0 +1,336 @@
+#define IR_FRONTAL_CENTRO A1
+#define IR_DIAGONAL_DERECHO 2
+#define IR_DIAGONAL_IZQUIERDO A4
+#define IR_PERPENDICULAR_DERECHO A5
+#define IR_PERPENDICULAR_IZQUIERDO 4
+
+#define MOTOR_DERECHO_PWM 6  
+#define MOTOR_DERECHO_A 8
+#define MOTOR_DERECHO_B 7
+#define MOTOR_IZQUIERDO_A 9
+#define MOTOR_IZQUIERDO_B 10
+#define MOTOR_IZQUIERDO_PWM 11
+
+#define MICROSTARTER 3
+#define QTR_DERECHO A2
+#define QTR_IZQUIERDO A3
+
+#define UMBRAL_BLANCO 500
+#define UMBRAL_NEGRO 800
+
+// Variables de control
+int estadoEnemigo = 0;
+bool modoEsperaGiro = false;
+unsigned long tiempoInicioBusqueda = 0;
+unsigned long ultimoMovimiento = 0;
+unsigned long ultimaVerificacionQTR = 0;
+const unsigned long TIEMPO_ESPERA_BUSQUEDA = 100;
+const unsigned long TIEMPO_MAX_SIN_MOVIMIENTO = 2000;
+const unsigned long INTERVALO_CHECK_QTR = 5;
+
+// Declaración de funciones
+void avanzar(int potenciaDerecho, int potenciaIzquierdo);
+void retroceder(int potenciaDerecho, int potenciaIzquierdo);
+void girarDerecha(int potenciaDerecho, int potenciaIzquierdo);
+void girarIzquierda(int potenciaDerecho, int potenciaIzquierdo);
+void detenerMotores();
+bool verificarLimiteDojo();
+void manejarDeteccionBorde(int duracionRetroceso, int duracionGiro, bool direccionDerecha);
+void verificarRobotAtascado();
+void ejecutarLogicaCombate();
+void modoBusqueda();
+int obtenerEstadoEnemigo();
+
+void setup() {
+  pinMode(IR_FRONTAL_CENTRO, INPUT);
+  pinMode(IR_DIAGONAL_DERECHO, INPUT);
+  pinMode(IR_DIAGONAL_IZQUIERDO, INPUT);
+  pinMode(IR_PERPENDICULAR_DERECHO, INPUT);
+  pinMode(IR_PERPENDICULAR_IZQUIERDO, INPUT);
+
+  pinMode(QTR_DERECHO, INPUT);
+  pinMode(QTR_IZQUIERDO, INPUT);
+  pinMode(MICROSTARTER, INPUT_PULLUP);
+
+  pinMode(MOTOR_DERECHO_A, OUTPUT);
+  pinMode(MOTOR_DERECHO_B, OUTPUT);
+  pinMode(MOTOR_IZQUIERDO_A, OUTPUT);
+  pinMode(MOTOR_IZQUIERDO_B, OUTPUT);
+  pinMode(MOTOR_DERECHO_PWM, OUTPUT);
+  pinMode(MOTOR_IZQUIERDO_PWM, OUTPUT);
+
+  detenerMotores();
+  Serial.begin(9600);
+  ultimoMovimiento = millis();
+  ultimaVerificacionQTR = millis();
+}
+
+void loop() {
+  // Esperar a que se active el microstarter (LOW con INPUT_PULLUP)
+  if (digitalRead(MICROSTARTER) == LOW) {
+    detenerMotores();
+    return;
+  }
+
+  // PRIORIDAD 1: Verificar línea blanca constantemente
+  if (millis() - ultimaVerificacionQTR >= INTERVALO_CHECK_QTR) {
+    ultimaVerificacionQTR = millis();
+    if (verificarLimiteDojo()) {
+      return;
+    }
+  }
+
+  // PRIORIDAD 2: Verificar si está atascado
+  verificarRobotAtascado();
+
+  // PRIORIDAD 3: Ejecutar lógica de combate
+  ejecutarLogicaCombate();
+}
+
+// Verifica el borde del dojo
+bool verificarLimiteDojo() {
+  int qtrDerecho = analogRead(QTR_DERECHO);
+  int qtrIzquierdo = analogRead(QTR_IZQUIERDO);
+
+  // Ambos sensores detectan blanco
+  if (qtrDerecho < UMBRAL_BLANCO && qtrIzquierdo < UMBRAL_BLANCO) {
+    manejarDeteccionBorde(250, 150, true);
+    return true;
+  } 
+  // Solo sensor derecho detecta blanco
+  else if (qtrDerecho < UMBRAL_BLANCO) {
+    manejarDeteccionBorde(200, 120, false);
+    return true;
+  } 
+  // Solo sensor izquierdo detecta blanco
+  else if (qtrIzquierdo < UMBRAL_BLANCO) {
+    manejarDeteccionBorde(200, 120, true);
+    return true;
+  }
+
+  return false;
+}
+
+// Maneja la detección de borde
+void manejarDeteccionBorde(int duracionRetroceso, int duracionGiro, bool direccionDerecha) {
+  detenerMotores();
+  delay(10);
+  
+  retroceder(255, 255);
+  delay(duracionRetroceso);
+
+  if (direccionDerecha) {
+    girarDerecha(255, 255);
+  } else {
+    girarIzquierda(255, 255);
+  }
+
+  delay(duracionGiro);
+  detenerMotores();
+  delay(10);
+  
+  // Resetear estado
+  modoEsperaGiro = false;
+  ultimoMovimiento = millis();
+}
+
+// Verificación de atasco
+void verificarRobotAtascado() {
+  if (millis() - ultimoMovimiento > TIEMPO_MAX_SIN_MOVIMIENTO) {
+    retroceder(200, 200);
+    delay(150);
+    girarDerecha(200, 200);
+    delay(200);
+    detenerMotores();
+    delay(10);
+    ultimoMovimiento = millis();
+  }
+}
+
+// Lógica de combate con 5 sensores IR
+void ejecutarLogicaCombate() {
+  estadoEnemigo = obtenerEstadoEnemigo();
+
+  switch (estadoEnemigo) {
+    case 1:  // Frontal centro
+      avanzar(255, 255);
+      break;
+      
+    case 2:  // Diagonal derecho
+      avanzar(240, 200);
+      break;
+      
+    case 3:  // Diagonal izquierdo
+      avanzar(200, 240);
+      break;
+      
+    case 4:  // Perpendicular derecho
+      girarDerecha(220, 220);
+      break;
+      
+    case 5:  // Perpendicular izquierdo
+      girarIzquierda(220, 220);
+      break;
+      
+    case 6:  // Centro + diagonal derecho
+      avanzar(255, 230);
+      break;
+      
+    case 7:  // Centro + diagonal izquierdo
+      avanzar(230, 255);
+      break;
+      
+    case 8:  // Centro + ambos diagonales
+      avanzar(255, 255);
+      break;
+      
+    case 9:  // Ambos diagonales
+      avanzar(255, 255);
+      break;
+      
+    case 10: // Diagonal y perpendicular derecho
+      avanzar(255, 200);
+      break;
+      
+    case 11: // Diagonal y perpendicular izquierdo
+      avanzar(200, 255);
+      break;
+      
+    case 12: // Múltiples frontales
+      avanzar(255, 255);
+      break;
+      
+    case 13: // Todos activos - ATAQUE TOTAL
+      avanzar(255, 255);
+      break;
+      
+    case 0:  // Sin detección
+    default:
+      modoBusqueda();
+      break;
+  }
+
+  ultimoMovimiento = millis();
+}
+
+// Modo búsqueda mejorado
+void modoBusqueda() {
+  if (!modoEsperaGiro) {
+    tiempoInicioBusqueda = millis();
+    modoEsperaGiro = true;
+  }
+  
+  unsigned long tiempoTranscurrido = millis() - tiempoInicioBusqueda;
+  
+  if (tiempoTranscurrido < TIEMPO_ESPERA_BUSQUEDA) {
+    detenerMotores();
+  } else if (tiempoTranscurrido < TIEMPO_ESPERA_BUSQUEDA + 300) {
+    girarDerecha(180, 180);
+  } else {
+    modoEsperaGiro = false;
+  }
+}
+
+// Estado del enemigo con 5 sensores - LÓGICA CORREGIDA
+int obtenerEstadoEnemigo() {
+  // Lectura correcta: sensores IR activan en LOW
+  bool fC = digitalRead(IR_FRONTAL_CENTRO) == LOW;
+  bool dD = digitalRead(IR_DIAGONAL_DERECHO) == LOW;
+  bool dI = digitalRead(IR_DIAGONAL_IZQUIERDO) == LOW;
+  bool pD = digitalRead(IR_PERPENDICULAR_DERECHO) == LOW;
+  bool pI = digitalRead(IR_PERPENDICULAR_IZQUIERDO) == LOW;
+
+  // Prioridad de detección: de más específico a más general
+  
+  // Todos activos (máxima prioridad - enemigo muy cerca)
+  if (fC && dD && dI && pD && pI) return 13;
+  
+  // Centro + ambos diagonales
+  if (fC && dD && dI) return 8;
+  
+  // Centro + diagonal derecho
+  if (fC && dD) return 6;
+  
+  // Centro + diagonal izquierdo
+  if (fC && dI) return 7;
+  
+  // Diagonal y perpendicular derecho
+  if (dD && pD) return 10;
+  
+  // Diagonal y perpendicular izquierdo
+  if (dI && pI) return 11;
+  
+  // Múltiples frontales con perpendiculares
+  if ((fC || dD || dI) && (pD || pI)) return 12;
+  
+  // Ambos diagonales sin centro
+  if (dD && dI) return 9;
+  
+  // Solo frontal centro
+  if (fC) return 1;
+  
+  // Solo diagonal derecho
+  if (dD) return 2;
+  
+  // Solo diagonal izquierdo
+  if (dI) return 3;
+  
+  // Solo perpendicular derecho
+  if (pD) return 4;
+  
+  // Solo perpendicular izquierdo
+  if (pI) return 5;
+
+  // Sin detección
+  return 0;
+}
+
+// Funciones de movimiento
+void avanzar(int pD, int pI) {
+  digitalWrite(MOTOR_DERECHO_A, HIGH);
+  digitalWrite(MOTOR_DERECHO_B, LOW);
+  analogWrite(MOTOR_DERECHO_PWM, pD);
+
+  digitalWrite(MOTOR_IZQUIERDO_A, LOW);
+  digitalWrite(MOTOR_IZQUIERDO_B, HIGH);
+  analogWrite(MOTOR_IZQUIERDO_PWM, pI);
+}
+
+void retroceder(int pD, int pI) {
+  digitalWrite(MOTOR_DERECHO_A, LOW);
+  digitalWrite(MOTOR_DERECHO_B, HIGH);
+  analogWrite(MOTOR_DERECHO_PWM, pD);
+
+  digitalWrite(MOTOR_IZQUIERDO_A, HIGH);
+  digitalWrite(MOTOR_IZQUIERDO_B, LOW);
+  analogWrite(MOTOR_IZQUIERDO_PWM, pI);
+}
+
+void girarDerecha(int pD, int pI) {
+  digitalWrite(MOTOR_DERECHO_A, LOW);
+  digitalWrite(MOTOR_DERECHO_B, HIGH);
+  analogWrite(MOTOR_DERECHO_PWM, pD);
+
+  digitalWrite(MOTOR_IZQUIERDO_A, LOW);
+  digitalWrite(MOTOR_IZQUIERDO_B, HIGH);
+  analogWrite(MOTOR_IZQUIERDO_PWM, pI);
+}
+
+void girarIzquierda(int pD, int pI) {
+  digitalWrite(MOTOR_DERECHO_A, HIGH);
+  digitalWrite(MOTOR_DERECHO_B, LOW);
+  analogWrite(MOTOR_DERECHO_PWM, pD);
+
+  digitalWrite(MOTOR_IZQUIERDO_A, HIGH);
+  digitalWrite(MOTOR_IZQUIERDO_B, LOW);
+  analogWrite(MOTOR_IZQUIERDO_PWM, pI);
+}
+
+void detenerMotores() {
+  digitalWrite(MOTOR_DERECHO_A, LOW);
+  digitalWrite(MOTOR_DERECHO_B, LOW);
+  digitalWrite(MOTOR_IZQUIERDO_A, LOW);
+  digitalWrite(MOTOR_IZQUIERDO_B, LOW);
+  analogWrite(MOTOR_DERECHO_PWM, 0);
+  analogWrite(MOTOR_IZQUIERDO_PWM, 0);
+}
